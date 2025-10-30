@@ -1,0 +1,1437 @@
+# -*- coding: utf-8 -*-
+#
+# Aplicación Flask para replicar lógica de una hoja de cálculo de Excel.
+# Incluye soporte PWA (Progressive Web App) para instalación móvil.
+# Requiere: 'Flask', 'pandas', 'openpyxl'
+#
+# INSTRUCCIÓN: Coloca tu archivo de Excel nombrado 'datos.xlsx' en la misma carpeta.
+
+from flask import Flask, request, render_template_string, jsonify
+import pandas as pd
+import json 
+import math 
+
+# 1. Configuración de la aplicación Flask
+app = Flask(__name__)
+EXCEL_FILE_PATH = 'datos.xlsx'
+datos_hojas = {}
+error_lectura = None
+
+# --- CONSTANTES DE CONFIGURACIÓN ---
+HOJAS_PANEL = [
+    'Panel', 
+    'Microdinamia', 
+    'Macrodinamia', 
+    'Ventilatorio', 
+    'Neurocrítico'
+]
+
+# URLs de imágenes temáticas (baja opacidad y desenfoque para fondo)
+BACKGROUND_IMAGES = {
+    'Macrodinamia': "https://placehold.co/1000x300/1e3a8a/ffffff?text=Echocardiogram",
+    'Microdinamia': "https://placehold.co/1000x300/4c0519/ffffff?text=Microcirculation+Diagram",
+    'Ventilatorio': "https://placehold.co/1000x300/104e8b/ffffff?text=Lungs+and+Ventilator",
+    'Neurocrítico': "https://placehold.co/1000x300/365314/ffffff?text=Brain+Monitoring"
+}
+
+
+# --- Función para cargar el Excel ---
+def cargar_datos_excel():
+    """Carga todas las hojas del archivo de Excel usando pandas."""
+    global datos_hojas, error_lectura
+    try:
+        datos_hojas = pd.read_excel(EXCEL_FILE_PATH, sheet_name=HOJAS_PANEL)
+        error_lectura = None
+        return True
+    except FileNotFoundError:
+        error_lectura = f"ERROR: El archivo '{EXCEL_FILE_PATH}' no se encontró en la carpeta."
+        return False
+    except Exception as e:
+        error_lectura = f"ERROR al leer el archivo Excel: {e}"
+        return False
+
+# Carga inicial de datos al iniciar la aplicación
+cargar_datos_excel()
+
+# Definición del template HTML (Diseño responsivo con Tailwind)
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitoreo UCI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        
+        /* Estilos para el texto en cursiva */
+        .subtitle-italic { font-style: italic; }
+        
+        /* Clases para la tabla de resultados del panel */
+        .resultado-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr; /* Dos columnas: Etiqueta y Valor */
+            gap: 0px 10px;
+        }
+        /* Estilo base para todos los inputs y selects */
+        .input-base {
+            transition: background-color 0.2s;
+            border-radius: 0.5rem; /* rounded-lg */
+            font-size: 0.875rem; /* text-sm */
+        }
+        
+        /* Reducción de tamaño de texto general */
+        .text-base { font-size: 0.875rem; /* Equivalente a text-sm */ }
+        .text-xl { font-size: 1.125rem; /* Equivalente a text-lg */ }
+        .text-2xl { font-size: 1.5rem; /* Equivalente a text-xl */ }
+        .text-4xl { font-size: 2.25rem; /* Equivalente a text-3xl */ }
+
+        /* Estilos de fondo para paneles de resultados */
+        .bg-panel {
+            background-size: cover;
+            background-position: center;
+            position: relative;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .bg-panel::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(255, 255, 255, 0.9); /* Superposición blanca para legibilidad */
+            backdrop-filter: blur(1px);
+        }
+        .bg-panel > * {
+            position: relative;
+            z-index: 10;
+        }
+    </style>
+    
+    <!-- PWA / MANIFEST LINK -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#374151"> 
+    
+</head>
+<body class="p-4 md:p-8">
+    <div class="max-w-4xl mx-auto bg-white rounded-2xl shadow-xl p-6 md:p-10">
+        <h1 class="text-4xl font-extrabold text-center text-indigo-700 mb-1">
+            Monitoreo UCI
+        </h1>
+        
+        <!-- Nuevo Título Cursivo -->
+        <p class="text-center text-gray-700 mb-6 text-xl subtitle-italic leading-tight">
+            ICU–CRIPTOS| Hemodynamic, Respiratory & Neurocritical Intelligence<br>
+            <span class="text-gray-500 text-base">Monitoreo del paciente crítico, en la palma de mi mano</span>
+        </p>
+        
+        <!-- Mensaje de estado de la carga de Excel -->
+        {% if error_lectura %}
+            <div class="p-4 mb-6 bg-red-100 border border-red-400 text-red-700 rounded-lg text-base">
+                <p class="font-bold">Error de Carga:</p>
+                <p>{{ error_lectura }}</p>
+            </div>
+        {% else %}
+            <!-- FORMULARIO DE ENTRADA DE DATOS DINÁMICOS -->
+            <form method="POST" action="/" id="input-form" 
+                  class="p-6 border border-gray-200 rounded-xl shadow-inner bg-gray-50 mb-8"
+                  oninput="submitForm()"> <!-- Cálculo en tiempo real -->
+                
+                <!-- 1. Datos Antropométricos -->
+                <div class="grid md:grid-cols-4 gap-4 mb-6 text-base">
+                    <div class="md:col-span-4">
+                        <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Datos Antropométricos</h2>
+                    </div>
+
+                    <!-- Sexo -->
+                    <div>
+                        <label for="sexo" class="block text-sm font-medium text-gray-700">Sexo:</label>
+                        <select id="sexo" name="sexo" required 
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               onchange="updateBackground(this)">
+                            <option value="">Selecciona</option>
+                            <option value="H" {% if inputs.sexo == 'H' %}selected{% endif %}>Hombre</option>
+                            <option value="M" {% if inputs.sexo == 'M' %}selected{% endif %}>Mujer</option>
+                        </select>
+                    </div>
+
+                    <!-- Edad -->
+                    <div>
+                        <label for="edad_años" class="block text-sm font-medium text-gray-700">Edad:</label>
+                        <input type="number" step="1" id="edad_años" name="edad_años" required 
+                               value="{{ inputs.edad_años or '' }}"
+                               placeholder="Edad en años"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- Peso -->
+                    <div>
+                        <label for="peso_kg" class="block text-sm font-medium text-gray-700">Peso:</label>
+                        <input type="number" step="0.1" id="peso_kg" name="peso_kg" required 
+                               value="{{ inputs.peso_kg or '' }}"
+                               placeholder="Peso en Kg"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- Talla -->
+                    <div>
+                        <label for="talla_m" class="block text-sm font-medium text-gray-700">Talla:</label>
+                        <input type="number" step="0.01" id="talla_m" name="talla_m" required 
+                               value="{{ inputs.talla_m or '' }}"
+                               placeholder="Talla en metros"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                </div>
+                
+                <!-- 2. Signos Vitales y Hemodinámica -->
+                <div class="grid md:grid-cols-4 gap-4 mb-6 text-base">
+                    <div class="md:col-span-4">
+                        <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Signos Vitales y Hemodinámica</h2>
+                    </div>
+
+                    <!-- TAS -->
+                    <div>
+                        <label for="tas" class="block text-sm font-medium text-gray-700">TAS:</label>
+                        <input type="number" step="1" id="tas" name="tas" required 
+                               value="{{ inputs.tas or '' }}"
+                               placeholder="TAS (mmHg)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- TAD -->
+                    <div>
+                        <label for="tad" class="block text-sm font-medium text-gray-700">TAD:</label>
+                        <input type="number" step="1" id="tad" name="tad" required 
+                               value="{{ inputs.tad or '' }}"
+                               placeholder="TAD (mmHg)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- FC -->
+                    <div>
+                        <label for="fc" class="block text-sm font-medium text-gray-700">FC:</label>
+                        <input type="number" step="1" id="fc" name="fc" required 
+                               value="{{ inputs.fc or '' }}"
+                               placeholder="FC (lpm)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- SatO2 (SV) -->
+                    <div>
+                        <label for="sato2_sv" class="block text-sm font-medium text-gray-700">SatO₂ (SV):</label>
+                        <input type="number" step="0.1" id="sato2_sv" name="sato2_sv" required 
+                               value="{{ inputs.sato2_sv or '' }}"
+                               placeholder="SatO₂ (%)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                </div>
+
+                <!-- 3. Gasometría Arterial -->
+                <div class="grid md:grid-cols-3 gap-4 mb-6 text-base">
+                    <div class="md:col-span-3">
+                        <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Gasometría Arterial</h2>
+                    </div>
+
+                    <!-- pH (a) -->
+                    <div>
+                        <label for="ph_a" class="block text-sm font-medium text-gray-700">pH:</label>
+                        <input type="number" step="0.01" id="ph_a" name="ph_a" required 
+                               value="{{ inputs.ph_a or '' }}"
+                               placeholder="pH arterial"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- PaCO2 -->
+                    <div>
+                        <label for="paco2" class="block text-sm font-medium text-gray-700">PaCO₂:</label>
+                        <input type="number" step="0.1" id="paco2" name="paco2" required 
+                               value="{{ inputs.paco2 or '' }}"
+                               placeholder="PaCO₂ (mmHg)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                    
+                    <!-- PaO2 -->
+                    <div>
+                        <label for="pao2" class="block text-sm font-medium text-gray-700">PaO₂:</label>
+                        <input type="number" step="0.1" id="pao2" name="pao2" required 
+                               value="{{ inputs.pao2 or '' }}"
+                               placeholder="PaO₂ (mmHg)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                    
+                    <!-- SatO2 (a) -->
+                    <div>
+                        <label for="sato2_a" class="block text-sm font-medium text-gray-700">SatO₂ (a):</label>
+                        <input type="number" step="0.1" id="sato2_a" name="sato2_a" required 
+                               value="{{ inputs.sato2_a or '' }}"
+                               placeholder="SatO₂ (%)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- Lactato -->
+                    <div>
+                        <label for="lactato" class="block text-sm font-medium text-gray-700">Lactato:</label>
+                        <input type="number" step="0.01" id="lactato" name="lactato" required 
+                               value="{{ inputs.lactato or '' }}"
+                               placeholder="Lactato (mmol/L)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- Hb -->
+                    <div>
+                        <label for="hb" class="block text-sm font-medium text-gray-700">Hb:</label>
+                        <input type="number" step="0.1" id="hb" name="hb" required 
+                               value="{{ inputs.hb or '' }}"
+                               placeholder="Hemoglobina (g/dL)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                </div>
+                
+                <!-- 4. Gasometría Venosa -->
+                <div class="grid md:grid-cols-4 gap-4 mb-6 text-base">
+                    <div class="md:col-span-4">
+                        <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Gasometría Venosa</h2>
+                    </div>
+
+                    <!-- pHv -->
+                    <div>
+                        <label for="ph_v" class="block text-sm font-medium text-gray-700">pHv:</label>
+                        <input type="number" step="0.01" id="ph_v" name="ph_v" required 
+                               value="{{ inputs.ph_v or '' }}"
+                               placeholder="pH venoso"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- PvCO2 -->
+                    <div>
+                        <label for="pvco2" class="block text-sm font-medium text-gray-700">PvCO₂:</label>
+                        <input type="number" step="0.1" id="pvco2" name="pvco2" required 
+                               value="{{ inputs.pvco2 or '' }}"
+                               placeholder="PvCO₂ (mmHg)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                    
+                    <!-- PvO2 -->
+                    <div>
+                        <label for="pvo2" class="block text-sm font-medium text-gray-700">PvO₂:</label>
+                        <input type="number" step="0.1" id="pvo2" name="pvo2" required 
+                               value="{{ inputs.pvo2 or '' }}"
+                               placeholder="PvO₂ (mmHg)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                    
+                    <!-- SatvO2 -->
+                    <div>
+                        <label for="satvo2" class="block text-sm font-medium text-gray-700">SatvO₂:</label>
+                        <input type="number" step="0.1" id="satvo2" name="satvo2" required 
+                               value="{{ inputs.satvo2 or '' }}"
+                               placeholder="SatvO₂ (%)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                </div>
+
+                <!-- 5. Macrodinamia (POCUS) -->
+                <div class="grid md:grid-cols-5 gap-4 mb-6 text-base">
+                    <div class="md:col-span-5">
+                        <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">POCUS (Macrodinamia)</h2>
+                    </div>
+
+                    <!-- VTI -->
+                    <div>
+                        <label for="vti" class="block text-sm font-medium text-gray-700">VTI:</label>
+                        <input type="number" step="0.1" id="vti" name="vti" required 
+                               value="{{ inputs.vti or '' }}"
+                               placeholder="VTI (cm)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- TSVI -->
+                    <div>
+                        <label for="tsvi" class="block text-sm font-medium text-gray-700">TSVI:</label>
+                        <input type="number" step="0.1" id="tsvi" name="tsvi" required 
+                               value="{{ inputs.tsvi or '' }}"
+                               placeholder="TSVI (cm)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- VCI -->
+                    <div>
+                        <label for="vci" class="block text-sm font-medium text-gray-700">VCI:</label>
+                        <input type="number" step="0.1" id="vci" name="vci" required 
+                               value="{{ inputs.vci or '' }}"
+                               placeholder="VCI (cm)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                    
+                    <!-- VCI Colaps. -->
+                    <div>
+                        <label for="vci_colaps" class="block text-sm font-medium text-gray-700">VCI Colaps.:</label>
+                        <select id="vci_colaps" name="vci_colaps" required 
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               onchange="updateBackground(this)">
+                            <option value="">Selecciona Colapso</option>
+                            <option value="total" {% if inputs.vci_colaps == 'total' %}selected{% endif %}>Total</option>
+                            <option value=">50%" {% if inputs.vci_colaps == '>50%' %}selected{% endif %}> >50% </option>
+                            <option value="<50%" {% if inputs.vci_colaps == '<50%' %}selected{% endif %}> <50% </option>
+                            <option value="No cambios" {% if inputs.vci_colaps == 'No cambios' %}selected{% endif %}> No cambios </option>
+                        </select>
+                    </div>
+
+                    <!-- PVC Medido -->
+                    <div>
+                        <label for="pvc_medido" class="block text-sm font-medium text-gray-700">PVC Medido:</label>
+                        <input type="number" step="1" id="pvc_medido" name="pvc_medido" required 
+                               value="{{ inputs.pvc_medido or '' }}"
+                               placeholder="PVC Medida (mmHg)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                </div>
+                
+                <!-- 6. Datos Ventilatorios -->
+                <div class="grid md:grid-cols-4 gap-4 mb-6 text-base">
+                    <div class="md:col-span-4">
+                        <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Datos Ventilatorios</h2>
+                    </div>
+
+                    <!-- MODO (Selector) -->
+                    <div>
+                        <label for="modo" class="block text-sm font-medium text-gray-700">MODO:</label>
+                        <select id="modo" name="modo" required 
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               onchange="updateBackground(this)">
+                            <option value="">Selecciona Modo</option>
+                            <option value="PCV" {% if inputs.modo == 'PCV' %}selected{% endif %}>PCV</option>
+                            <option value="VCV" {% if inputs.modo == 'VCV' %}selected{% endif %}>VCV</option>
+                        </select>
+                    </div>
+
+                    <!-- VT protec. -->
+                    <div>
+                        <label for="vt_protec" class="block text-sm font-medium text-gray-700">VT protec.:</label>
+                        <input type="number" step="0.1" id="vt_protec" name="vt_protec" required 
+                               value="{{ inputs.vt_protec or '' }}"
+                               placeholder="VT protec. (ml/kg)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                    
+                    <!-- VT Ventilador -->
+                    <div>
+                        <label for="vt_ventilador" class="block text-sm font-medium text-gray-700">VT Ventilador:</label>
+                        <input type="number" step="1" id="vt_ventilador" name="vt_ventilador" required 
+                               value="{{ inputs.vt_ventilador or '' }}"
+                               placeholder="Vt (ml)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                    
+                    <!-- FR -->
+                    <div>
+                        <label for="fr" class="block text-sm font-medium text-gray-700">FR:</label>
+                        <input type="number" step="1" id="fr" name="fr" required 
+                               value="{{ inputs.fr or '' }}"
+                               placeholder="FR (lpm)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- PeCO2 -->
+                    <div>
+                        <label for="peco2" class="block text-sm font-medium text-gray-700">PeCO₂:</label>
+                        <input type="number" step="0.1" id="peco2" name="peco2" required 
+                               value="{{ inputs.peco2 or '' }}"
+                               placeholder="PeCO₂ (mmHg)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- PEEP -->
+                    <div>
+                        <label for="peep" class="block text-sm font-medium text-gray-700">PEEP:</label>
+                        <input type="number" step="1" id="peep" name="peep" required 
+                               value="{{ inputs.peep or '' }}"
+                               placeholder="PEEP (cmH₂O)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- FIO2 -->
+                    <div>
+                        <label for="fio2" class="block text-sm font-medium text-gray-700">FIO₂:</label>
+                        <input type="number" step="0.01" id="fio2" name="fio2" required 
+                               value="{{ inputs.fio2 or '' }}"
+                               placeholder="FiO₂ (0.x)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- Plateau -->
+                    <div>
+                        <label for="plateau" class="block text-sm font-medium text-gray-700">Plateau:</label>
+                        <input type="number" step="1" id="plateau" name="plateau" required 
+                               value="{{ inputs.plateau or '' }}"
+                               placeholder="Pplat (cmH₂O)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- Ppico -->
+                    <div>
+                        <label for="ppico" class="block text-sm font-medium text-gray-700">Ppico:</label>
+                        <input type="number" step="1" id="ppico" name="ppico" required 
+                               value="{{ inputs.ppico or '' }}"
+                               placeholder="Ppico (cmH₂O)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- Cstat -->
+                    <div>
+                        <label for="cstat_input" class="block text-sm font-medium text-gray-700">Cstat (medida):</label>
+                        <input type="number" step="0.1" id="cstat_input" name="cstat_input" required 
+                               value="{{ inputs.cstat_input or '' }}"
+                               placeholder="Cstat (ml/cmH₂O)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- Cdin -->
+                    <div>
+                        <label for="cdin_input" class="block text-sm font-medium text-gray-700">Cdin (medida):</label>
+                        <input type="number" step="0.1" id="cdin_input" name="cdin_input" required 
+                               value="{{ inputs.cdin_input or '' }}"
+                               placeholder="Cdin (ml/cmH₂O)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+                    
+                    <!-- V/min -->
+                    <div>
+                        <label for="v_min" class="block text-sm font-medium text-gray-700">V/min:</label>
+                        <input type="number" step="0.1" id="v_min" name="v_min" required 
+                               value="{{ inputs.v_min or '' }}"
+                               placeholder="Volumen minuto (L/min)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+                    <!-- POCC -->
+                    <div>
+                        <label for="pocc" class="block text-sm font-medium text-gray-700">POCC:</label>
+                        <input type="number" step="0.1" id="pocc" name="pocc" required 
+                               value="{{ inputs.pocc or '' }}"
+                               placeholder="PO.1 (cmH₂O)"
+                               class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                               oninput="updateBackground(this)">
+                    </div>
+
+
+                </div>
+                
+                <!-- 7. Monitorización Neurocrítica -->
+                <div class="md:col-span-4 mb-6 text-base">
+                    <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Monitorización Neurocrítica</h2>
+
+                    <!-- 7.1 DTC - ACM -->
+                    <div class="grid md:grid-cols-4 gap-4 mb-4 p-4 border rounded-lg bg-white shadow-sm">
+                        <div class="md:col-span-4">
+                            <h3 class="font-semibold text-gray-700">DTC (ACM)</h3>
+                        </div>
+                        
+                        <!-- VS ACM -->
+                        <div>
+                            <label for="vs_acm" class="block text-sm font-medium text-gray-700">VS:</label>
+                            <input type="number" step="0.1" id="vs_acm" name="vs_acm" required 
+                                   value="{{ inputs.vs_acm or '' }}"
+                                   placeholder="VS (cm/s)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+
+                        <!-- VD ACM -->
+                        <div>
+                            <label for="vd_acm" class="block text-sm font-medium text-gray-700">VD:</label>
+                            <input type="number" step="0.1" id="vd_acm" name="vd_acm" required 
+                                   value="{{ inputs.vd_acm or '' }}"
+                                   placeholder="VD (cm/s)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+                    </div>
+                    
+                    <!-- 7.2 DTC - AB -->
+                    <div class="grid md:grid-cols-4 gap-4 mb-4 p-4 border rounded-lg bg-white shadow-sm">
+                        <div class="md:col-span-4">
+                            <h3 class="font-semibold text-gray-700">DTC (AB)</h3>
+                        </div>
+                        
+                        <!-- VS AB -->
+                        <div>
+                            <label for="vs_ab" class="block text-sm font-medium text-gray-700">VS:</label>
+                            <input type="number" step="0.1" id="vs_ab" name="vs_ab" required 
+                                   value="{{ inputs.vs_ab or '' }}"
+                                   placeholder="VS (cm/s)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+
+                        <!-- VD AB -->
+                        <div>
+                            <label for="vd_ab" class="block text-sm font-medium text-gray-700">VD:</label>
+                            <input type="number" step="0.1" id="vd_ab" name="vd_ab" required 
+                                   value="{{ inputs.vd_ab or '' }}"
+                                   placeholder="VD (cm/s)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+                    </div>
+
+                    <!-- 7.3 DTC - Genérico -->
+                    <div class="grid md:grid-cols-5 gap-4 mb-4 p-4 border rounded-lg bg-white shadow-sm">
+                        <div class="md:col-span-5">
+                            <h3 class="font-semibold text-gray-700">DTC (Genérico)</h3>
+                        </div>
+
+                        <!-- Vaso Select -->
+                        <div>
+                            <label for="vaso_dtc" class="block text-sm font-medium text-gray-700">Vaso:</label>
+                            <select id="vaso_dtc" name="vaso_dtc" required 
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   onchange="updateBackground(this)">
+                                <option value="">Selecciona</option>
+                                <option value="ACP" {% if inputs.vaso_dtc == 'ACP' %}selected{% endif %}>ACP</option>
+                                <option value="ACA" {% if inputs.vaso_dtc == 'ACA' %}selected{% endif %}>ACA</option>
+                                <option value="AB" {% if inputs.vaso_dtc == 'AB' %}selected{% endif %}>AB</option>
+                                <option value="ACM" {% if inputs.vaso_dtc == 'ACM' %}selected{% endif %}>ACM</option>
+                            </select>
+                        </div>
+                        
+                        <!-- VS Genérico -->
+                        <div>
+                            <label for="vs_dtc" class="block text-sm font-medium text-gray-700">VS:</label>
+                            <input type="number" step="0.1" id="vs_dtc" name="vs_dtc" required 
+                                   value="{{ inputs.vs_dtc or '' }}"
+                                   placeholder="VS (cm/s)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+
+                        <!-- VD Genérico -->
+                        <div>
+                            <label for="vd_dtc" class="block text-sm font-medium text-gray-700">VD:</label>
+                            <input type="number" step="0.1" id="vd_dtc" name="vd_dtc" required 
+                                   value="{{ inputs.vd_dtc or '' }}"
+                                   placeholder="VD (cm/s)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+                    </div>
+                    
+                    <!-- 7.4 Flujo Vascular Extracraneal -->
+                    <div class="grid md:grid-cols-4 gap-4 mb-4 p-4 border rounded-lg bg-white shadow-sm">
+                        <div class="md:col-span-4">
+                            <h3 class="font-semibold text-gray-700">Flujo Vascular Extracraneal</h3>
+                        </div>
+
+                        <!-- VM Art. Carótida interna extracraneal -->
+                        <div>
+                            <label for="vm_aci" class="block text-sm font-medium text-gray-700">VM Art. Carótida Int.:</label>
+                            <input type="number" step="0.1" id="vm_aci" name="vm_aci" required 
+                                   value="{{ inputs.vm_aci or '' }}"
+                                   placeholder="VM (cm/s)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+
+                        <!-- VM Art. Vertebral Extracraneal -->
+                        <div>
+                            <label for="vm_ave" class="block text-sm font-medium text-gray-700">VM Art. Vertebral:</label>
+                            <input type="number" step="0.1" id="vm_ave" name="vm_ave" required 
+                                   value="{{ inputs.vm_ave or '' }}"
+                                   placeholder="VM (cm/s)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+                    </div>
+
+                    <!-- 7.5 VNO -->
+                    <div class="grid md:grid-cols-4 gap-4 mb-4 p-4 border rounded-lg bg-white shadow-sm">
+                        <div class="md:col-span-4">
+                            <h3 class="font-semibold text-gray-700">VNO (Vaina del Nervio Óptico)</h3>
+                        </div>
+
+                        <!-- Der. -->
+                        <div>
+                            <label for="vno_der" class="block text-sm font-medium text-gray-700">Der. (mm):</label>
+                            <input type="number" step="0.1" id="vno_der" name="vno_der" required 
+                                   value="{{ inputs.vno_der or '' }}"
+                                   placeholder="Der. (mm)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+                        
+                        <!-- Izq. -->
+                        <div>
+                            <label for="vno_izq" class="block text-sm font-medium text-gray-700">Izq. (mm):</label>
+                            <input type="number" step="0.1" id="vno_izq" name="vno_izq" required 
+                                   value="{{ inputs.vno_izq or '' }}"
+                                   placeholder="Izq. (mm)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+
+                        <!-- DGO -->
+                        <div>
+                            <label for="vno_dgo" class="block text-sm font-medium text-gray-700">DGO (mm):</label>
+                            <input type="number" step="0.1" id="vno_dgo" name="vno_dgo" required 
+                                   value="{{ inputs.vno_dgo or '' }}"
+                                   placeholder="DGO (mm)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+                    </div>
+
+                    <!-- 7.6 Gasometría jO2 -->
+                    <div class="grid md:grid-cols-3 gap-4 mb-4 p-4 border rounded-lg bg-white shadow-sm">
+                        <div class="md:col-span-3">
+                            <h3 class="font-semibold text-gray-700">Gasometría yugular (jO₂)</h3>
+                        </div>
+                        
+                        <!-- pH -->
+                        <div>
+                            <label for="ph_jo2" class="block text-sm font-medium text-gray-700">pH:</label>
+                            <input type="number" step="0.01" id="ph_jo2" name="ph_jo2" required 
+                                   value="{{ inputs.ph_jo2 or '' }}"
+                                   placeholder="pH"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+
+                        <!-- PjCO2 -->
+                        <div>
+                            <label for="paco2_jo2" class="block text-sm font-medium text-gray-700">PjCO₂:</label>
+                            <input type="number" step="0.1" id="paco2_jo2" name="paco2_jo2" required 
+                                   value="{{ inputs.paco2_jo2 or '' }}"
+                                   placeholder="PjCO₂ (mmHg)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+
+                        <!-- PjO2 -->
+                        <div>
+                            <label for="pao2_jo2" class="block text-sm font-medium text-gray-700">PjO₂:</label>
+                            <input type="number" step="0.1" id="pao2_jo2" name="pao2_jo2" required 
+                                   value="{{ inputs.pao2_jo2 or '' }}"
+                                   placeholder="PjO₂ (mmHg)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+                        
+                        <!-- SatO2 -->
+                        <div>
+                            <label for="sato2_jo2" class="block text-sm font-medium text-gray-700">SjO₂:</label>
+                            <input type="number" step="0.1" id="sato2_jo2" name="sato2_jo2" required 
+                                   value="{{ inputs.sato2_jo2 or '' }}"
+                                   placeholder="SjO₂ (%)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+
+                        <!-- Lactato -->
+                        <div>
+                            <label for="lactato_jo2" class="block text-sm font-medium text-gray-700">Lactato:</label>
+                            <input type="number" step="0.01" id="lactato_jo2" name="lactato_jo2" required 
+                                   value="{{ inputs.lactato_jo2 or '' }}"
+                                   placeholder="Lactato (mmol/L)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+
+                        <!-- PvO2 Yugular (H23) -->
+                        <div>
+                            <label for="pvo2_jo2" class="block text-sm font-medium text-gray-700">PvO₂ Yugular:</label>
+                            <input type="number" step="0.1" id="pvo2_jo2" name="pvo2_jo2" required 
+                                   value="{{ inputs.pvo2_jo2 or '' }}"
+                                   placeholder="PvO₂ Yugular (mmHg)"
+                                   class="input-base mt-1 block w-full px-3 py-2 border border-gray-300 shadow-sm"
+                                   oninput="updateBackground(this)">
+                        </div>
+                    </div>
+                </div>
+                
+            </form>
+
+            <!-- 3. Sección de RESULTADOS -->
+            {% if resultados_json and not error_calculo %}
+                <div class="mt-8">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-6">Resultados por Sección</h2>
+                    <div class="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                        
+                        {% set resultados = json.loads(resultados_json) %}
+                        {% for panel_nombre, panel_data in resultados.items() %}
+                            {% set bg_img = BACKGROUND_IMAGES[panel_nombre] if panel_nombre in BACKGROUND_IMAGES else '' %}
+                            <div class="bg-panel rounded-xl shadow-md p-5 transition duration-200 hover:shadow-lg"
+                                 style="{% if bg_img %}background-image: url('{{ bg_img }}');{% endif %}">
+                                <h3 class="text-xl font-semibold mb-3 text-indigo-800">{{ panel_nombre }}</h3>
+                                {% if panel_data.error %}
+                                    <div class="p-2 text-sm bg-red-50 text-red-700 font-medium rounded-lg">{{ panel_data.error }}</div>
+                                {% else %}
+                                    <!-- Si es el panel principal, usamos la estructura de dos columnas solicitada -->
+                                    {% if panel_nombre == 'Panel' %}
+                                        <div class="resultado-grid text-sm">
+                                            {% for key, valor in panel_data.items() %}
+                                                <span class="text-gray-600 font-medium text-right pr-2">{{ key }}:</span>
+                                                <span class="text-gray-900 font-bold">{{ valor | safe }}</span>
+                                            {% endfor %}
+                                        </div>
+                                    {% else %}
+                                        <!-- Para Microdinamia y otros, usamos la estructura simple clave-valor -->
+                                        <div class="text-sm">
+                                            {% for key, valor in panel_data.items() %}
+                                                <div class="flex justify-between items-center py-1 border-b border-gray-200 last:border-b-0">
+                                                    <span class="text-gray-600 font-medium">{{ key }}:</span>
+                                                    <span class="text-gray-900 font-bold">{{ valor | safe }}</span>
+                                                </div>
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+
+                    </div>
+                    
+                    <!-- Cuadro de Abreviaturas Ventilatorias -->
+                    {% if resultados.Ventilatorio and not resultados.Ventilatorio.error %}
+                        <div class="mt-8 p-5 bg-blue-50 border-l-4 border-blue-400 rounded-lg shadow-inner text-base">
+                            <h4 class="text-lg font-semibold text-blue-800 mb-3">Abreviaturas Ventilatorias</h4>
+                            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm text-gray-700">
+                                <div><span class="font-bold">EM:</span> Espacio Muerto</div>
+                                <div><span class="font-bold">EV:</span> Eficiencia Ventilatoria</div>
+                                <div><span class="font-bold">PpMt:</span> Presión transpulmonar muscular</div>
+                                <div><span class="font-bold">PM:</span> Poder Mecánico</div>
+                                <div><span class="font-bold">Raw:</span> Resistencia de Vía Aérea</div>
+                            </div>
+                        </div>
+                    {% endif %}
+
+                </div>
+            {% elif error_calculo %}
+                 <div class="mt-8 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg text-base" role="alert">
+                    <p class="font-bold">Error en el Cálculo de Fórmulas</p>
+                    <p class="text-sm">
+                        {{ error_calculo }}
+                        <br>
+                        <span class="font-semibold text-xs text-red-600 block mt-1">
+                            El error ha pintado los campos inválidos de rojo tenue.
+                        </span>
+                    </p>
+                </div>
+            {% endif %}
+            
+        {% endif %}
+    </div>
+
+    <!-- Script para enviar el formulario en tiempo real -->
+    <script>
+        let timeout = null;
+        const form = document.getElementById('input-form');
+        
+        // Esta función envía el formulario después de un breve retraso
+        function submitForm() {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => {
+                form.submit();
+            }, 500); // 500ms de retraso para evitar envíos constantes mientras se escribe
+        }
+
+        // Script para colorear dinámicamente los campos de entrada
+        document.addEventListener('DOMContentLoaded', () => {
+            const inputs = document.querySelectorAll('.input-base');
+            
+            // Función que aplica el color inicial basado en el valor
+            const applyInitialColor = (input) => {
+                const isSelect = input.tagName === 'SELECT';
+                let hasValue;
+
+                if (isSelect) {
+                    hasValue = input.value !== '' && input.value !== null;
+                } else {
+                    const numValue = parseFloat(input.value);
+                    hasValue = input.value.trim() !== '' && !isNaN(numValue);
+                }
+
+                // Limpia clases de color
+                input.classList.remove('bg-white', 'bg-green-100', 'bg-red-100');
+                
+                // Aplica el color basado en el valor actual
+                if (hasValue) {
+                    input.classList.add('bg-green-100');
+                } else {
+                    input.classList.add('bg-white');
+                }
+            };
+
+            // Aplica el color inicial a todos los inputs
+            inputs.forEach(applyInitialColor);
+
+            // Si hubo un error de cálculo (POST fallido), pinta de rojo los inputs que se enviaron vacíos o con error.
+            {% if error_calculo %}
+                inputs.forEach(input => {
+                    if (input.type !== 'select-one' && input.required && input.value.trim() === '') {
+                        input.classList.remove('bg-white', 'bg-green-100');
+                        input.classList.add('bg-red-100');
+                    }
+                     if (input.type === 'number' && input.value.trim() !== '' && isNaN(parseFloat(input.value))) {
+                        input.classList.remove('bg-white', 'bg-green-100');
+                        input.classList.add('bg-red-100');
+                    }
+                });
+            {% endif %}
+
+            // Función de escucha para actualizar el color al escribir o cambiar
+            window.updateBackground = (input) => {
+                const isSelect = input.tagName === 'SELECT';
+                let hasValue;
+                
+                if (isSelect) {
+                    hasValue = input.value !== '' && input.value !== null;
+                } else {
+                    hasValue = input.value.trim() !== '';
+                }
+
+                input.classList.remove('bg-white', 'bg-green-100', 'bg-red-100');
+
+                if (hasValue) {
+                    input.classList.add('bg-green-100');
+                } else {
+                    input.classList.add('bg-white');
+                }
+            };
+        });
+    </script>
+</body>
+</html>
+"""
+
+# 4. --- Lógica de Replicación de Fórmulas ---
+def replicar_formulas(user_inputs):
+    """
+    Función que replica la lógica de las fórmulas de Excel.
+    Recibe la entrada dinámica del usuario.
+    """
+    resultados = {}
+
+    if error_lectura or not datos_hojas:
+        return {"error": "No se cargaron los datos de Excel."}, None
+
+    # --- ENTRADAS DEL USUARIO (Conversión de tipo y uso de 0.0 si está vacío) ---
+    
+    # Función de ayuda para convertir a float de forma segura
+    def get_float(key):
+        return float(user_inputs.get(key) or 0.0)
+
+    sexo = user_inputs.get('sexo')
+    edad = get_float('edad_años')
+    peso_kg = get_float('peso_kg')
+    talla_m = get_float('talla_m')
+    
+    tas = get_float('tas')
+    tad = get_float('tad')
+    fc = get_float('fc')
+    sato2_sv = get_float('sato2_sv')
+    
+    ph_a = get_float('ph_a')
+    paco2 = get_float('paco2')
+    pao2 = get_float('pao2')
+    sato2_a = get_float('sato2_a')
+    lactato = get_float('lactato')
+    hb = get_float('hb')
+    
+    ph_v = get_float('ph_v')
+    pvco2 = get_float('pvco2')
+    pvo2 = get_float('pvo2')
+    satvo2 = get_float('satvo2')
+
+    vti = get_float('vti')
+    tsvi = get_float('tsvi')
+    vci = get_float('vci')
+    vci_colaps = user_inputs.get('vci_colaps')
+    pvc_medido = get_float('pvc_medido')
+    
+    modo = user_inputs.get('modo') 
+    vt_protec_ml_kg = get_float('vt_protec') 
+    vt_ventilador = get_float('vt_ventilador') 
+    fr = get_float('fr') 
+    peco2 = get_float('peco2') 
+    peep = get_float('peep') 
+    fio2 = get_float('fio2') 
+    plateau = get_float('plateau') 
+    ppico = get_float('ppico') 
+    cstat_input = get_float('cstat_input') 
+    cdin_input = get_float('cdin_input') 
+    v_min = get_float('v_min') 
+    pocc = get_float('pocc') 
+
+    vs_acm = get_float('vs_acm')
+    vd_acm = get_float('vd_acm')
+    vs_ab = get_float('vs_ab')
+    vd_ab = get_float('vd_ab')
+    vaso_dtc = user_inputs.get('vaso_dtc')
+    vs_dtc = get_float('vs_dtc')
+    vd_dtc = get_float('vd_dtc')
+    vm_aci = get_float('vm_aci')
+    vm_ave = get_float('vm_ave')
+    vno_der = get_float('vno_der')
+    vno_izq = get_float('vno_izq')
+    vno_dgo = get_float('vno_dgo')
+    ph_jo2 = get_float('ph_jo2') 
+    paco2_jo2 = get_float('paco2_jo2') 
+    pao2_jo2 = get_float('pao2_jo2') 
+    sato2_jo2 = get_float('sato2_jo2')
+    lactato_jo2 = get_float('lactato_jo2') 
+    pvo2_jo2 = get_float('pvo2_jo2')
+
+    
+    # --- INICIO DE LA LÓGICA DE TUS 5 HOJAS ---
+    
+    try:
+        # --- CÁLCULOS INTERMEDIOS DEL PANEL PRINCIPAL (D5 a D40) ---
+        
+        tam = (tas + (2 * tad)) / 3
+        
+        # SCT (D10)
+        sct = (0.020247 * (peso_kg ** 0.425) * (talla_m ** 0.725)) * 10 if talla_m != 0.0 else 0.0
+            
+        # PI (Peso Ideal - D11)
+        talla_cm_por_2_54 = (sct * 100) / 2.54 if sct != 0.0 else 0.0
+        pi = 0.0
+        if sexo == "H":
+            pi = 56.2 + 1.41 * (talla_cm_por_2_54 - 60)
+        elif sexo == "M":
+            pi = 53.1 + 1.36 * (talla_cm_por_2_54 - 60)
+        
+        # --- 1. PANEL (Cálculos de la hoja Panel) ---
+        panel_resultados = {}
+        
+        panel_resultados['-- Datos Antropométricos --'] = " "
+        
+        panel_resultados['Sexo'] = sexo
+        panel_resultados['Edad'] = f"{edad:.0f} años"
+        panel_resultados['Peso'] = f"{peso_kg:.0f} Kg"
+        panel_resultados['Talla'] = f"{talla_m:.2f} m"
+        
+        imc = peso_kg / (talla_m ** 2) if talla_m != 0.0 else "Error (Talla 0)"
+        
+        talla_cm = talla_m * 100
+        act = "Error (Sexo)"
+        if sexo == "H":
+            act = 2.447 - (0.09156 * edad) + (0.3362 * peso_kg) + (0.1074 * talla_cm)
+        elif sexo == "M":
+            act = -2.097 + (0.1069 * talla_cm) + (0.2466 * peso_kg)
+            
+        panel_resultados['IMC'] = f"{imc:.2f}" if isinstance(imc, float) and math.isfinite(imc) else imc
+        panel_resultados['SCT'] = f"{sct:.2f} m²"
+        panel_resultados['PI'] = f"{pi:.2f} Kg" if math.isfinite(pi) else pi
+        panel_resultados['ACT'] = f"{act:.2f} L" if isinstance(act, float) and math.isfinite(act) else act
+        
+        panel_resultados['-- Signos Vitales --'] = " "
+        
+        panel_resultados['TAS'] = f"{tas:.0f} mmHg"
+        panel_resultados['TAD'] = f"{tad:.0f} mmHg"
+        panel_resultados['TAM'] = f"{tam:.0f} mmHg"
+        panel_resultados['FC'] = f"{fc:.0f} lpm"
+        panel_resultados['SatO₂ (SV)'] = f"{sato2_sv:.0f} %"
+        
+        panel_resultados['-- Gasometría Arterial --'] = " "
+        
+        panel_resultados['pH (a)'] = f"{ph_a:.2f}"
+        panel_resultados['PaCO₂'] = f"{paco2:.1f} mmHg"
+        panel_resultados['PaO₂'] = f"{pao2:.1f} mmHg"
+        panel_resultados['SatO₂ (a)'] = f"{sato2_a:.1f} %"
+        panel_resultados['Lactato'] = f"{lactato:.2f} mmol/L"
+        panel_resultados['Hb'] = f"{hb:.1f} g/dL"
+        
+        panel_resultados['-- Gasometría Venosa --'] = " "
+        
+        panel_resultados['pHv'] = f"{ph_v:.2f}"
+        panel_resultados['PvCO₂'] = f"{pvco2:.1f} mmHg"
+        panel_resultados['PvO₂'] = f"{pvo2:.1f} mmHg"
+        panel_resultados['SatvO₂'] = f"{satvo2:.1f} %"
+        
+        resultados['Panel'] = panel_resultados
+        
+        
+        # --- 2. MACRODINAMIA (POCUS) ---
+        macrodinamia_resultados = {}
+        
+        tsvi_inf = (0.01 * (talla_m * 100)) + 0.25
+        vs_calc = ((tsvi ** 2) * 0.785) * vti
+        gc = (vs_calc / 1000) * fc
+        ic = gc / sct if sct != 0.0 else "Error (SCT 0)"
+        
+        # D15: PVC ECO
+        pvc_eco = "Error"
+        if vci < 1.5:
+            pvc_eco = 5
+        elif vci >= 1.5 and vci <= 2.5:
+            if vci_colaps in ["total", ">50%"]:
+                pvc_eco = 8
+            elif vci_colaps == "<50%":
+                pvc_eco = 13
+        elif vci > 2.5:
+            if vci_colaps == "<50%":
+                pvc_eco = 18
+            elif vci_colaps == "No cambios":
+                pvc_eco = 20
+        
+        # D17: RVS
+        rvs = "Error (GC/PVC)"
+        if not isinstance(pvc_eco, str) and gc != 0.0:
+            rvs = ((tam - pvc_eco) * 80) / gc
+            
+        # D18: RVSI
+        rvsi = "Error (SCT/RVS)"
+        if sct != 0.0 and isinstance(rvs, float):
+            rvsi = rvs / sct
+
+        macrodinamia_resultados['VTI'] = f"{vti:.2f} cm"
+        macrodinamia_resultados['TSVI'] = f"{tsvi:.2f} cm"
+        macrodinamia_resultados['TSVI Inferido'] = f"{tsvi_inf:.2f} cm"
+        macrodinamia_resultados['VS'] = f"{vs_calc:.0f} ml"
+        macrodinamia_resultados['GC'] = f"{gc:.2f} L/min"
+        ic_format = f"{ic:.2f} L/min/m²" if isinstance(ic, float) and math.isfinite(ic) else ic
+        macrodinamia_resultados['IC'] = ic_format
+        macrodinamia_resultados['VCI'] = f"{vci:.2f} cm"
+        macrodinamia_resultados['VCI Colaps.'] = f"{vci_colaps}"
+        pvc_eco_format = f"{pvc_eco:.0f} mmHg" if isinstance(pvc_eco, int) else pvc_eco
+        macrodinamia_resultados['PVC ECO'] = pvc_eco_format
+        macrodinamia_resultados['PVC Medido'] = f"{pvc_medido:.0f} mmHg"
+        rvs_format = f"{rvs:.0f} dyn.s/cm⁵" if isinstance(rvs, float) and math.isfinite(rvs) else rvs
+        macrodinamia_resultados['RVS'] = rvs_format
+        rvsi_format = f"{rvsi:.0f} dyn.s/cm⁵/m²" if isinstance(rvsi, float) and math.isfinite(rvsi) else rvsi
+        macrodinamia_resultados['RVSI'] = rvsi_format
+        
+        resultados['Macrodinamia'] = macrodinamia_resultados
+
+
+        # --- 3. MICRODINAMIA (Cálculos de la hoja Microdinamia) ---
+        
+        micro_resultados = {}
+        
+        sato2_frac = sato2_a / 100.0
+        satvo2_frac = satvo2 / 100.0
+        sato2_sv_frac = sato2_sv / 100.0
+        
+        cao2 = (1.36 * hb * sato2_frac) + (0.0031 * pao2)
+        cvo2 = (1.36 * hb * satvo2_frac) + (0.0031 * pvo2)
+        cco2 = ((hb * 1.36) * sato2_sv_frac) + (pao2 * 0.0031)
+        davo2 = cao2 - cvo2
+        
+        vo2 = gc * (cao2 - cvo2) * 10 if isinstance(gc, (int, float)) else "Error (GC)"
+        do2 = (gc * cao2) * 10 if isinstance(gc, (int, float)) else "Error (GC)"
+        
+        vo2i = vo2 / sct if sct != 0.0 and isinstance(vo2, (int, float)) else "Error (SCT/VO₂)"
+        do2i = do2 / sct if sct != 0.0 and isinstance(do2, (int, float)) else "Error (SCT/DO₂)"
+        exto2 = (davo2 / cao2) * 100 if cao2 != 0.0 else "Error (CaO₂ 0)"
+        davco2 = pvco2 - paco2
+        
+        gc_fick_calc = "Error (DavO₂ 0)"
+        if isinstance(davo2, (int, float)) and cao2 != 0.0 and davo2 != 0.0:
+            gc_fick_calc = ((davo2 * 100.0) / cao2) / davo2
+
+        micro_resultados['CaO₂'] = f"{cao2:.2f} ml/dL"
+        micro_resultados['CvO₂'] = f"{cvo2:.2f} ml/dL"
+        micro_resultados['CcO₂'] = f"{cco2:.2f} ml/dL"
+        micro_resultados['DavO₂'] = f"{davo2:.2f} ml/dL"
+        vo2_format = f"{vo2:.2f} ml/min" if isinstance(vo2, float) and math.isfinite(vo2) else vo2
+        micro_resultados['VO₂'] = vo2_format
+        vo2i_format = f"{vo2i:.2f} ml/min/m²" if isinstance(vo2i, float) and math.isfinite(vo2i) else vo2i
+        micro_resultados['VO₂I'] = vo2i_format
+        do2_format = f"{do2:.2f} ml/min" if isinstance(do2, float) and math.isfinite(do2) else do2
+        micro_resultados['DO₂'] = do2_format
+        do2i_format = f"{do2i:.2f} ml/min/m²" if isinstance(do2i, float) and math.isfinite(do2i) else do2i
+        micro_resultados['DO₂I'] = do2i_format
+        exto2_format = f"{exto2:.2f} %" if isinstance(exto2, float) and math.isfinite(exto2) else exto2
+        micro_resultados['ExtO₂'] = exto2_format
+        micro_resultados['SatvO₂'] = f"{satvo2:.1f} %"
+        micro_resultados['DavCO₂'] = f"{davco2:.1f} mmHg"
+        micro_resultados['Lactato'] = f"{lactato:.2f} mmol/L"
+        gc_fick_calc_format = f"{gc_fick_calc:.2f}" if isinstance(gc_fick_calc, float) and math.isfinite(gc_fick_calc) else gc_fick_calc
+        micro_resultados['GC Fick (Calc.)'] = gc_fick_calc_format
+        
+        resultados['Microdinamia'] = micro_resultados
+        
+        # --- 4. VENTILATORIO (Implementación completa) ---
+        ventilatorio_resultados = {}
+
+        peso_sdra = pi
+        
+        vt_protec_calc = vt_protec_ml_kg * peso_sdra if math.isfinite(peso_sdra) else "Error (PI no válido)"
+            
+        paco2_vent = paco2
+        driving_p = plateau - peep
+        
+        cstat_calc = "Error (DP 0)"
+        if driving_p != 0:
+            cstat_calc = vt_ventilador / driving_p
+            
+        ppico_menos_peep = ppico - peep
+        cdin_calc = "Error (Ppico=PEEP)"
+        if ppico_menos_peep != 0:
+            cdin_calc = vt_ventilador / ppico_menos_peep
+            
+        raw = ppico - plateau
+
+        
+        ventilatorio_resultados['MODO'] = modo
+        peso_sdra_format = f"{peso_sdra:.2f} Kg" if math.isfinite(peso_sdra) else peso_sdra
+        ventilatorio_resultados['Peso SDRA (PI)'] = peso_sdra_format
+        ventilatorio_resultados['VT protec.'] = f"{vt_protec_ml_kg:.1f} ml/Kg"
+        vt_protec_calc_format = f"{vt_protec_calc:.0f} ml" if isinstance(vt_protec_calc, float) and math.isfinite(vt_protec_calc) else vt_protec_calc
+        ventilatorio_resultados['VT protec. C.'] = vt_protec_calc_format
+        ventilatorio_resultados['VT Ventilador'] = f"{vt_ventilador:.0f} ml"
+        ventilatorio_resultados['FR'] = f"{fr:.0f} lpm"
+        ventilatorio_resultados['PaCO₂'] = f"{paco2_vent:.1f} mmHg"
+        ventilatorio_resultados['PeCO₂'] = f"{peco2:.1f} mmHg"
+        ventilatorio_resultados['PEEP'] = f"{peep:.0f} cmH₂O"
+        ventilatorio_resultados['FIO₂'] = f"{fio2:.2f}"
+        ventilatorio_resultados['Plateau'] = f"{plateau:.0f} cmH₂O"
+        driving_p_format = f"{driving_p:.0f} cmH₂O" if isinstance(driving_p, float) and math.isfinite(driving_p) else driving_p
+        ventilatorio_resultados['Driving P.'] = driving_p_format
+        ventilatorio_resultados['Ppico'] = f"{ppico:.0f} cmH₂O"
+        ventilatorio_resultados['Cstat (medida)'] = f"{cstat_input:.1f} ml/cmH₂O"
+        cstat_calc_format = f"{cstat_calc:.1f} ml/cmH₂O" if isinstance(cstat_calc, float) and math.isfinite(cstat_calc) else cstat_calc
+        ventilatorio_resultados['Cstat Calc'] = cstat_calc_format
+        ventilatorio_resultados['Cdin (medida)'] = f"{cdin_input:.1f} ml/cmH₂O"
+        cdin_calc_format = f"{cdin_calc:.1f} ml/cmH₂O" if isinstance(cdin_calc, float) and math.isfinite(cdin_calc) else cdin_calc
+        ventilatorio_resultados['Cdin Calc'] = cdin_calc_format
+        raw_format = f"{raw:.1f} cmH₂O/L/s" if isinstance(raw, float) and math.isfinite(raw) else raw 
+        ventilatorio_resultados['Raw'] = raw_format
+        ventilatorio_resultados['V/min'] = f"{v_min:.1f} L/min"
+        ventilatorio_resultados['POCC'] = f"{pocc:.1f} cmH₂O"
+
+        resultados['Ventilatorio'] = ventilatorio_resultados
+        
+        # --- 5. NEUROCRÍTICO (Implementación) ---
+        
+        neuro_resultados = {}
+        
+        # --- 5.1 DTC - ACM ---
+        vm_acm = (vs_acm + (2 * vd_acm)) / 3
+        ip_acm = (vs_acm - vd_acm) / vm_acm if vm_acm != 0.0 else "Error (VM 0)"
+        ir_acm = (vs_acm - vd_acm) / vs_acm if vs_acm != 0.0 else "Error (VS 0)"
+        
+        pic = "Error (IP ACM)"
+        if isinstance(ip_acm, float) and math.isfinite(ip_acm):
+            pic = (10.93 * ip_acm) - 1.28
+        
+        ppc = "Error (PIC no válido)"
+        if isinstance(pic, float) and math.isfinite(pic):
+            ppc = tam - pic
+        
+        # --- 5.2 DTC - AB ---
+        vm_ab = (vs_ab + (2 * vd_ab)) / 3
+        ip_ab = (vs_ab - vd_ab) / vm_ab if vm_ab != 0.0 else "Error (VM 0)"
+        ir_ab = (vs_ab - vd_ab) / vs_ab if vs_ab != 0.0 else "Error (VS 0)"
+
+        # --- 5.3 DTC - Genérico ---
+        vm_dtc = (vs_dtc + (2 * vd_dtc)) / 3
+        ip_dtc = (vs_dtc - vd_dtc) / vm_dtc if vm_dtc != 0.0 else "Error (VM 0)"
+        ir_dtc = (vs_dtc - vd_dtc) / vs_dtc if vs_dtc != 0.0 else "Error (VS 0)"
+
+        # --- 5.5 Índices ---
+        il = vm_acm / vm_aci if vm_aci != 0.0 else "Error (ACI 0)"
+        isou = vm_ab / vm_ave if vm_ave != 0.0 else "Error (AVE 0)"
+        
+        # --- 5.6 VNO ---
+        vno_dgo_calc = (vno_der + vno_izq) / (2 * vno_dgo) if vno_dgo != 0.0 else "Error (DGO 0)"
+
+        # --- 5.8 Neuromonitoreo Yugular ---
+        sjo2_calc = sato2_jo2
+        avdo2 = cao2 - pvo2_jo2 if isinstance(cao2, (int, float)) and math.isfinite(cao2) else "Error (CaO₂)"
+        ceo2 = exto2 - sjo2_calc if isinstance(exto2, (int, float)) and math.isfinite(exto2) else "Error (ExtO₂)"
+        cvjo2 = (1.36 * hb * (sjo2_calc / 100.0)) + (0.0031 * pao2_jo2)
+        
+        # --- PREPARACIÓN DE RESULTADOS ---
+        
+        # ... (Formato de resultados omitido aquí por brevedad, pero completo en el código) ...
+        
+        neuro_resultados['-- DTC (ACM) --'] = " "
+        neuro_resultados['VS (ACM)'] = f"{vs_acm:.1f} cm/s"
+        neuro_resultados['VD (ACM)'] = f"{vd_acm:.1f} cm/s"
+        vm_acm_format = f"{vm_acm:.1f} cm/s" if isinstance(vm_acm, float) and math.isfinite(vm_acm) else vm_acm
+        neuro_resultados['VM (ACM)'] = vm_acm_format
+        neuro_resultados['IP (ACM)'] = f"{ip_acm:.2f}" if isinstance(ip_acm, float) and math.isfinite(ip_acm) else ip_acm
+        neuro_resultados['IR (ACM)'] = f"{ir_acm:.2f}" if isinstance(ir_acm, float) and math.isfinite(ir_acm) else ir_acm
+        neuro_resultados['PIC (Calc.)'] = f"{pic:.1f} mmHg" if isinstance(pic, float) and math.isfinite(pic) else pic
+        neuro_resultados['PPC (Calc.)'] = f"{ppc:.1f} mmHg" if isinstance(ppc, float) and math.isfinite(ppc) else ppc
+
+        neuro_resultados['-- DTC (AB) --'] = " "
+        neuro_resultados['VS (AB)'] = f"{vs_ab:.1f} cm/s"
+        neuro_resultados['VD (AB)'] = f"{vd_ab:.1f} cm/s"
+        vm_ab_format = f"{vm_ab:.1f} cm/s" if isinstance(vm_ab, float) and math.isfinite(vm_ab) else vm_ab
+        neuro_resultados['VM (AB)'] = vm_ab_format
+        neuro_resultados['IP (AB)'] = f"{ip_ab:.2f}" if isinstance(ip_ab, float) and math.isfinite(ip_ab) else ip_ab
+        neuro_resultados['IR (AB)'] = f"{ir_ab:.2f}" if isinstance(ir_ab, float) and math.isfinite(ir_ab) else ir_ab
+
+        neuro_resultados['-- DTC (Genérico) --'] = " "
+        neuro_resultados['Vaso Medido'] = vaso_dtc
+        neuro_resultados['VS'] = f"{vs_dtc:.1f} cm/s"
+        neuro_resultados['VD'] = f"{vd_dtc:.1f} cm/s"
+        vm_dtc_format = f"{vm_dtc:.1f} cm/s" if isinstance(vm_dtc, float) and math.isfinite(vm_dtc) else vm_dtc
+        neuro_resultados['VM'] = vm_dtc_format
+        neuro_resultados['IP'] = f"{ip_dtc:.2f}" if isinstance(ip_dtc, float) and math.isfinite(ip_dtc) else ip_dtc
+        neuro_resultados['IR'] = f"{ir_dtc:.2f}" if isinstance(ir_dtc, float) and math.isfinite(ir_dtc) else ir_dtc
+
+        neuro_resultados['-- Flujo Vascular Extracraneal --'] = " "
+        neuro_resultados['VM Art. Carótida Int.'] = f"{vm_aci:.1f} cm/s"
+        neuro_resultados['VM Art. Vertebral'] = f"{vm_ave:.1f} cm/s"
+
+        neuro_resultados['-- Índices Combinados --'] = " "
+        il_format = f"{il:.2f}" if isinstance(il, float) and math.isfinite(il) else il
+        neuro_resultados['Índice Lindergard'] = il_format
+        isou_format = f"{isou:.2f}" if isinstance(isou, float) and math.isfinite(isou) else isou
+        neuro_resultados['Índice de Soustiel'] = isou_format
+        
+        neuro_resultados['-- VNO (Vaina Nervio Óptico) --'] = " "
+        neuro_resultados['Der.'] = f"{vno_der:.1f} mm"
+        neuro_resultados['Izq.'] = f"{vno_izq:.1f} mm"
+        neuro_resultados['DGO'] = f"{vno_dgo:.1f} mm"
+        vno_dgo_calc_format = f"{vno_dgo_calc:.2f}" if isinstance(vno_dgo_calc, float) and math.isfinite(vno_dgo_calc) else vno_dgo_calc
+        neuro_resultados['VNO/DGO'] = vno_dgo_calc_format
+
+        neuro_resultados['-- Gasometría yugular (jO₂) --'] = " "
+        neuro_resultados['pH'] = f"{ph_jo2:.2f}"
+        neuro_resultados['PjCO₂'] = f"{paco2_jo2:.1f} mmHg"
+        neuro_resultados['PjO₂'] = f"{pao2_jo2:.1f} mmHg"
+        neuro_resultados['SjO₂'] = f"{sato2_jo2:.1f} %"
+        neuro_resultados['Lactato'] = f"{lactato_jo2:.2f} mmol/L"
+        neuro_resultados['PvO₂ Yugular'] = f"{pvo2_jo2:.1f} mmHg"
+        
+        neuro_resultados['-- Neuromonitoreo --'] = " "
+        neuro_resultados['SjO₂ (Monit.)'] = f"{sjo2_calc:.1f} %"
+        avdo2_format = f"{avdo2:.2f}" if isinstance(avdo2, float) and math.isfinite(avdo2) else avdo2
+        neuro_resultados['AVDO₂'] = avdo2_format
+        ceo2_format = f"{ceo2:.2f}" if isinstance(ceo2, float) and math.isfinite(ceo2) else ceo2
+        neuro_resultados['CEO₂'] = ceo2_format
+        cvjo2_format = f"{cvjo2:.2f}" if isinstance(cvjo2, float) and math.isfinite(cvjo2) else cvjo2
+        neuro_resultados['CvJO₂'] = cvjo2_format
+
+        resultados['Neurocrítico'] = neuro_resultados
+        
+    except ZeroDivisionError:
+        return None, "Error de División por Cero. Revisa los campos de Talla, VM, ACI, AVE, y DGO."
+    except KeyError as e:
+        return None, f"Error: Una columna necesaria para el cálculo no fue encontrada: {e}."
+    except Exception as e:
+        return None, f"Error inesperado durante el cálculo: {e.__class__.__name__}: {e}"
+        
+    # --- FIN DE LA LÓGICA DE TUS 5 HOJAS ---
+
+    return json.dumps(resultados), None
+
+
+# 5. Ruta principal de Flask
+@app.route('/', methods=['GET', 'POST'])
+def inicio():
+    """Maneja las solicitudes GET (mostrar formulario) y POST (calcular)."""
+    
+    error_calculo = None
+    resultados_json = None
+    
+    # Inicialización de inputs con todas las nuevas celdas
+    user_inputs = {
+        'sexo': None, 'edad_años': None, 'peso_kg': None, 'talla_m': None,
+        'tas': None, 'tad': None, 'fc': None, 'sato2_sv': None,
+        'ph_a': None, 'paco2': None, 'pao2': None, 'sato2_a': None, 'lactato': None, 'hb': None,
+        'ph_v': None, 'pvco2': None, 'pvo2': None, 'satvo2': None,
+        'vti': None, 'tsvi': None, 'vci': None, 'vci_colaps': None, 'pvc_medido': None,
+        'modo': None, 'vt_protec': None, 'vt_ventilador': None, 'fr': None, 'peco2': None, 'peep': None, 
+        'fio2': None, 'plateau': None, 'ppico': None, 'cstat_input': None, 'cdin_input': None, 
+        'v_min': None, 'pocc': None,
+        'vs_acm': None, 'vd_acm': None, 'vs_ab': None, 'vd_ab': None, 'vaso_dtc': None, 'vs_dtc': None, 'vd_dtc': None, 
+        'vm_aci': None, 'vm_ave': None, 'vno_der': None, 'vno_izq': None, 'vno_dgo': None,
+        'ph_jo2': None, 'paco2_jo2': None, 'pao2_jo2': None, 'sato2_jo2': None, 'lactato_jo2': None, 'pvo2_jo2': None
+    }
+    
+    if request.method == 'POST':
+        # Captura de entradas (simplemente copiamos todos los campos como texto)
+        for key in user_inputs.keys():
+            user_inputs[key] = request.form.get(key)
+        
+        # Procesamiento de entradas (se realiza la conversión float dentro de replicar_formulas)
+        try:
+            resultados_json, error_calculo = replicar_formulas(user_inputs)
+        except Exception as e:
+            error_calculo = f"Error inesperado durante el POST: {e.__class__.__name__}: {e}"
+            
+    # Renderiza el template HTML
+    return render_template_string(
+        HTML_TEMPLATE, 
+        error_lectura=error_lectura,
+        resultados_json=resultados_json,
+        error_calculo=error_calculo,
+        inputs=user_inputs,
+        json=json
+    )
+
+# 6. Ruta para el Manifest (metadata de la PWA)
+@app.route('/manifest.json')
+def serve_manifest():
+    """Sirve el archivo manifest.json para que el navegador sepa cómo instalar la PWA."""
+    manifest = {
+        "name": "ICU-CRIPTOS",
+        "short_name": "UCI",
+        "description": "Monitoreo del paciente crítico, Hemodinámico, Respiratorio y Neurocrítico.",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#ffffff",
+        "theme_color": "#4f46e5",
+        "icons": [
+            {
+                "src": "https://placehold.co/192x192/4f46e5/ffffff?text=U",
+                "sizes": "192x192",
+                "type": "image/png"
+            },
+            {
+                "src": "https://placehold.co/512x512/4f46e5/ffffff?text=U",
+                "sizes": "512x512",
+                "type": "image/png"
+            }
+        ]
+    }
+    return jsonify(manifest)
+
+# 7. Ejecución del servidor
+if __name__ == '__main__':
+    print("-----------------------------------------------------------------------")
+    print("APLICACIÓN DE EXCEL INICIADA:")
+    print("¡LISTO PARA CONEXIÓN GLOBAL/MÓVIL!")
+    print("-----------------------------------------------------------------------")
+    app.run(debug=True, host='0.0.0.0', port=5002)
+
