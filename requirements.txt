@@ -1,1 +1,0 @@
-Flask==3.0.3pandas==2.2.2openpyxl==3.1.2gunicorn==22.0.0
